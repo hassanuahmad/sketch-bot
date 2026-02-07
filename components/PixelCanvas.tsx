@@ -40,11 +40,11 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
     if (!ctx) return;
 
     // Clear
-    ctx.fillStyle = "hsl(220, 14%, 6%)";
+    ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvasSize, canvasSize);
 
     // Grid lines
-    ctx.strokeStyle = "hsl(220, 12%, 13%)";
+    ctx.strokeStyle = "#e5e7eb";
     ctx.lineWidth = 0.5;
     for (let i = 0; i <= GRID_SIZE; i++) {
       ctx.beginPath();
@@ -61,7 +61,7 @@ const PixelCanvas: React.FC<PixelCanvasProps> = ({
     for (let r = 0; r < GRID_SIZE; r++) {
       for (let c = 0; c < GRID_SIZE; c++) {
         if (grid[r][c]) {
-          ctx.fillStyle = "hsl(210, 20%, 92%)";
+          ctx.fillStyle = "#0b0e14";
           ctx.fillRect(c * CELL_SIZE, r * CELL_SIZE, CELL_SIZE, CELL_SIZE);
         }
       }
