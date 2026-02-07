@@ -1,65 +1,244 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import React, { useState, useCallback } from "react";
+import { Monitor, Eye, Send } from "lucide-react";
+import ConnectionStatus from "@/components/ConnectionStatus";
+import PixelCanvas from "@/components/PixelCanvas";
+import Toolbar from "@/components/Toolbar";
+import ChatPanel from "@/components/ChatPanel";
+import RecentSketches, { type Sketch } from "@/components/RecentSketches";
+import POVView from "@/components/POVView";
+import {
+  usePixelCanvas,
+  GRID_SIZE,
+  createEmptyGrid,
+} from "@/hooks/usePixelCanvas";
+
+const MOCK_SKETCHES: Sketch[] = [
+  {
+    id: "1",
+    name: "Heart Shape",
+    timestamp: "2 min ago",
+    thumbnail: createMockGrid("heart"),
+  },
+  {
+    id: "2",
+    name: "Star Pattern",
+    timestamp: "15 min ago",
+    thumbnail: createMockGrid("star"),
+  },
+  {
+    id: "3",
+    name: "Robot Face",
+    timestamp: "1 hr ago",
+    thumbnail: createMockGrid("face"),
+  },
+];
+
+function createMockGrid(type: string): boolean[][] {
+  const grid = Array.from({ length: GRID_SIZE }, () =>
+    Array(GRID_SIZE).fill(false),
+  );
+  const cx = 25;
+  const cy = 25;
+
+  if (type === "heart") {
+    for (let i = -8; i <= 8; i++) {
+      for (let j = -8; j <= 8; j++) {
+        const x = i / 8;
+        const y = j / 8;
+        if ((x * x + y * y - 1) ** 3 - x * x * y * y * y <= 0) {
+          const r = cy + j;
+          const c = cx + i;
+          if (r >= 0 && r < GRID_SIZE && c >= 0 && c < GRID_SIZE) {
+            grid[r][c] = true;
+          }
+        }
+      }
+    }
+  } else if (type === "star") {
+    for (let angle = 0; angle < 360; angle += 1) {
+      const rad = (angle * Math.PI) / 180;
+      const r = angle % 72 < 36 ? 10 : 5;
+      const px = Math.round(cx + r * Math.cos(rad));
+      const py = Math.round(cy + r * Math.sin(rad));
+      if (px >= 0 && px < GRID_SIZE && py >= 0 && py < GRID_SIZE) {
+        grid[py][px] = true;
+      }
+    }
+  } else if (type === "face") {
+    // Simple smiley
+    for (let angle = 0; angle < 360; angle += 2) {
+      const rad = (angle * Math.PI) / 180;
+      const px = Math.round(cx + 10 * Math.cos(rad));
+      const py = Math.round(cy + 10 * Math.sin(rad));
+      if (px >= 0 && px < GRID_SIZE && py >= 0 && py < GRID_SIZE) {
+        grid[py][px] = true;
+      }
+    }
+    // Eyes
+    grid[22][21] = true;
+    grid[22][29] = true;
+    // Mouth
+    for (let i = -4; i <= 4; i++) {
+      const r = 28 + Math.round(Math.abs(i) * 0.3);
+      const c = cx + i;
+      if (r >= 0 && r < GRID_SIZE && c >= 0 && c < GRID_SIZE) {
+        grid[r][c] = true;
+      }
+    }
+  }
+  return grid;
+}
+
+const Index: React.FC = () => {
+  const {
+    grid,
+    tool,
+    setTool,
+    handleMouseDown,
+    handleMouseMove,
+    handleMouseUp,
+    clearCanvas,
+    setGrid,
+  } = usePixelCanvas();
+
+  const [activeTab, setActiveTab] = useState<"canvas" | "pov">("canvas");
+  const [isConnected] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [sketches, setSketches] = useState<Sketch[]>(MOCK_SKETCHES);
+
+  const isDrawingMode = activeTab === "canvas" && !isSubmitting;
+
+  const handleSubmit = useCallback(() => {
+    setIsSubmitting(true);
+
+    // Save current sketch
+    const newSketch: Sketch = {
+      id: Date.now().toString(),
+      name: `Sketch ${sketches.length + 1}`,
+      timestamp: "Just now",
+      thumbnail: grid.map((r) => [...r]),
+    };
+    setSketches((prev) => [newSketch, ...prev]);
+
+    // Switch to POV tab
+    setTimeout(() => {
+      setActiveTab("pov");
+      setIsSubmitting(false);
+    }, 500);
+  }, [grid, sketches.length]);
+
+  const handleSelectSketch = useCallback(
+    (sketch: Sketch) => {
+      if (activeTab === "pov") return;
+      setGrid(sketch.thumbnail.map((r) => [...r]));
+    },
+    [activeTab, setGrid],
+  );
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="flex h-screen bg-background overflow-hidden">
+      {/* Left Sidebar - Recent Sketches */}
+      <aside className="w-64 shrink-0 p-3 border-r border-border hidden lg:flex flex-col">
+        <RecentSketches
+          sketches={sketches}
+          onSelectSketch={handleSelectSketch}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col min-w-0 p-4 gap-3">
+        {/* Top Bar: Connection Status */}
+        <div className="flex items-center gap-4 flex-wrap">
+          <ConnectionStatus isConnected={isConnected} />
+
+          {/* Tabs */}
+          <div className="flex items-center bg-card border border-border rounded-lg overflow-hidden mx-auto">
+            <button
+              onClick={() => setActiveTab("canvas")}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all ${
+                activeTab === "canvas"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+              <Monitor className="w-4 h-4" />
+              Canvas
+            </button>
+            <button
+              onClick={() => setActiveTab("pov")}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-all ${
+                activeTab === "pov"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
             >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+              <Eye className="w-4 h-4" />
+              POV
+            </button>
+          </div>
+
+          {/* Submit */}
+          <button
+            onClick={handleSubmit}
+            disabled={activeTab === "pov" || isSubmitting}
+            className={`hidden lg:flex items-center gap-2 px-5 py-2 rounded-lg font-semibold text-sm transition-all ml-auto ${
+              activeTab === "pov" || isSubmitting
+                ? "bg-muted text-muted-foreground cursor-not-allowed"
+                : "bg-primary text-primary-foreground hover:opacity-90 glow-green"
+            }`}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+            <Send className="w-4 h-4" />
+            {isSubmitting ? "Sending..." : "Submit to Robot"}
+          </button>
+        </div>
+
+        {/* Canvas / POV Area */}
+        <div className="flex-1 flex gap-3 min-h-0">
+          <div className="flex-1 flex items-center justify-center">
+            {activeTab === "canvas" ? (
+              <PixelCanvas
+                grid={grid}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                disabled={!isDrawingMode}
+              />
+            ) : (
+              <POVView isActive={activeTab === "pov"} />
+            )}
+          </div>
+
+          {/* Right Toolbar */}
+          <div className="shrink-0">
+            <Toolbar
+              activeTool={tool}
+              onToolChange={setTool}
+              onClear={clearCanvas}
+              disabled={!isDrawingMode}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          </div>
         </div>
+
+        {/* Chat Panel */}
+        <ChatPanel disabled={activeTab === "pov"} />
+
+        {/* Mobile Submit Button */}
+        <button
+          onClick={handleSubmit}
+          disabled={activeTab === "pov" || isSubmitting}
+          className={`lg:hidden w-full py-3 px-4 rounded-lg font-semibold text-sm transition-all ${
+            activeTab === "pov" || isSubmitting
+              ? "bg-muted text-muted-foreground cursor-not-allowed"
+              : "bg-primary text-primary-foreground glow-green"
+          }`}
+        >
+          {isSubmitting ? "Sending..." : "Submit to Robot"}
+        </button>
       </main>
     </div>
   );
-}
+};
+
+export default Index;
