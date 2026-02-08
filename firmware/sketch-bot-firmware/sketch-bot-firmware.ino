@@ -50,6 +50,9 @@ const bool RUN_SELF_TEST = true;
 
 WebSocketsClient webSocket;
 uint32_t lastStatusLogMs = 0;
+uint32_t lastWsLogMs = 0;
+uint32_t lastWsReconnectMs = 0;
+uint8_t wsFailureStreak = 0;
 
 // ---------------- PWM settings (NEW API) --------------
 const int PWM_FREQ = 200;     // 100–500Hz often gives better torque on L298N
@@ -260,6 +263,12 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
       Serial.println("WS connected");
+      Serial.print("WS URL: ws://");
+      Serial.print(WS_HOST);
+      Serial.print(":");
+      Serial.print(WS_PORT);
+      Serial.println(WS_PATH);
+      wsFailureStreak = 0;
       sendRegister();
       break;
     case WStype_TEXT: {
@@ -269,6 +278,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     }
     case WStype_DISCONNECTED:
       Serial.println("WS disconnected");
+      if (wsFailureStreak < 255) wsFailureStreak++;
       break;
     case WStype_ERROR:
       Serial.println("WS error");
@@ -305,10 +315,34 @@ void setup() {
   webSocket.begin(WS_HOST, WS_PORT, WS_PATH);
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);
+  webSocket.enableHeartbeat(15000, 3000, 2);
 }
 
 void loop() {
   webSocket.loop();
+
+  if (millis() - lastWsLogMs > 10000) {
+    lastWsLogMs = millis();
+    Serial.print("WS state: ");
+    Serial.println(webSocket.isConnected() ? "connected" : "disconnected");
+  }
+
+  // If hotspot keeps stale connections, force a full Wi-Fi reconnect
+  if (!webSocket.isConnected() && WiFi.status() == WL_CONNECTED) {
+    if (millis() - lastWsReconnectMs > 20000 || wsFailureStreak >= 3) {
+      Serial.println("WS stuck, forcing Wi-Fi reconnect...");
+      lastWsReconnectMs = millis();
+      wsFailureStreak = 0;
+      webSocket.disconnect();
+      WiFi.disconnect(true);
+      delay(200);
+      connectWiFi();
+      webSocket.begin(WS_HOST, WS_PORT, WS_PATH);
+      webSocket.onEvent(webSocketEvent);
+      webSocket.setReconnectInterval(5000);
+      webSocket.enableHeartbeat(15000, 3000, 2);
+    }
+  }
 
   if (RUN_SELF_TEST) {
     moveTimedWithPen(forward, MOVE_MS, SPEED_MOVE, SPEED_MOVE);

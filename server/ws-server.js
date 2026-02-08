@@ -1,7 +1,7 @@
 const WebSocket = require("ws");
 
 const PORT = Number(process.env.WS_PORT || 3001);
-const wss = new WebSocket.Server({ port: PORT });
+const wss = new WebSocket.Server({ port: PORT, host: "0.0.0.0" });
 
 let carClient = null;
 let carName = "ESP32";
@@ -83,7 +83,8 @@ function handleCmdFromUi(ws, data) {
   safeSend(ws, { type: "cmd_sent", ok: true });
 }
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  console.log("WS client connected", req?.socket?.remoteAddress);
   ws.isAlive = true;
   ws.role = "unknown";
 
@@ -101,6 +102,7 @@ wss.on("connection", (ws) => {
     }
 
     if (data.type === "register") {
+      console.log("WS register", data.role, data.carName || data.client || "");
       registerClient(ws, data);
       return;
     }
@@ -124,6 +126,7 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
+    console.log("WS client disconnected");
     if (uiClients.has(ws)) uiClients.delete(ws);
     if (carClient === ws) {
       carClient = null;
@@ -131,7 +134,8 @@ wss.on("connection", (ws) => {
     }
   });
 
-  ws.on("error", () => {
+  ws.on("error", (err) => {
+    console.error("WS client error", err?.message || err);
     if (uiClients.has(ws)) uiClients.delete(ws);
     if (carClient === ws) {
       carClient = null;

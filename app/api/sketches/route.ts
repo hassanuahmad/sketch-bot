@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import sharp from "sharp";
 import { getDb } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -79,6 +80,21 @@ export async function POST(request: Request) {
   const filePath = path.join(PUBLIC_SKETCH_DIR, `${id}.svg`);
   fs.writeFileSync(filePath, svg, "utf8");
 
+  const pngPath = `/sketches/${id}.png`;
+  const pngFilePath = path.join(PUBLIC_SKETCH_DIR, `${id}.png`);
+  const latestPngPath = path.join(PUBLIC_SKETCH_DIR, "latest.png");
+  try {
+    await sharp(Buffer.from(svg))
+      .png()
+      .toFile(pngFilePath);
+    fs.copyFileSync(pngFilePath, latestPngPath);
+  } catch (error) {
+    return NextResponse.json(
+      { error: "Failed to render PNG from SVG." },
+      { status: 500 },
+    );
+  }
+
   const createdAt = new Date().toISOString();
   const db = getDb();
   db.prepare(
@@ -87,7 +103,7 @@ export async function POST(request: Request) {
   ).run(id, name, svgPath, createdAt);
 
   return NextResponse.json(
-    { id, name, svgPath, createdAt },
+    { id, name, svgPath, pngPath, createdAt },
     { status: 201 },
   );
 }

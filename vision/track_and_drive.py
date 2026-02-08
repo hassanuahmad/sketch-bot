@@ -1,4 +1,5 @@
 import time
+
 import cv2
 import numpy as np
 import websocket
@@ -7,6 +8,7 @@ import websocket
 #  CONFIG
 # ============================================================
 WS_URL = "ws://172.24.21.89:3001"
+PNG_PATH = "/Users/hassanuahmad/Desktop/sketch-bot/public/sketches/latest.png"
 PING_INTERVAL_S = 5
 
 # Command timing and thresholds (image pixels)
@@ -30,19 +32,14 @@ FORWARD_IS_NEGATIVE_Y = True
 #  KALMAN FILTER SETUP
 # ============================================================
 
+
 def create_kalman():
     kf = cv2.KalmanFilter(4, 2)
-    kf.transitionMatrix = np.array([
-        [1, 0, 1, 0],
-        [0, 1, 0, 1],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1]
-    ], np.float32)
+    kf.transitionMatrix = np.array(
+        [[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], np.float32
+    )
 
-    kf.measurementMatrix = np.array([
-        [1, 0, 0, 0],
-        [0, 1, 0, 0]
-    ], np.float32)
+    kf.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], np.float32)
 
     kf.processNoiseCov = np.eye(4, dtype=np.float32) * 0.03
     kf.measurementNoiseCov = np.eye(2, dtype=np.float32) * 0.5
@@ -52,6 +49,7 @@ def create_kalman():
 # ============================================================
 #  PNG OVERLAY (ALPHA BLENDING)
 # ============================================================
+
 
 def overlay_image_alpha(background, overlay, x, y):
     h, w = overlay.shape[:2]
@@ -67,15 +65,16 @@ def overlay_image_alpha(background, overlay, x, y):
         overlay_rgb = overlay
 
     for c in range(3):
-        background[y:y + h, x:x + w, c] = (
-            alpha * overlay_rgb[:, :, c] +
-            (1 - alpha) * background[y:y + h, x:x + w, c]
+        background[y : y + h, x : x + w, c] = (
+            alpha * overlay_rgb[:, :, c]
+            + (1 - alpha) * background[y : y + h, x : x + w, c]
         )
 
 
 # ============================================================
 #  WHITE CANVAS DETECTION
 # ============================================================
+
 
 def detect_white_canvas(frame):
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -100,6 +99,7 @@ def detect_white_canvas(frame):
 # ============================================================
 #  OVERLAY MASK HELPERS
 # ============================================================
+
 
 def build_draw_mask(resized_png):
     # A pixel is "drawn" if alpha > 0 and it's dark (near black).
@@ -129,7 +129,7 @@ def find_nearest_draw_pixel(draw_mask, x, y, radius=25):
     y0 = max(0, y - radius)
     y1 = min(h - 1, y + radius)
 
-    window = draw_mask[y0:y1 + 1, x0:x1 + 1]
+    window = draw_mask[y0 : y1 + 1, x0 : x1 + 1]
     ys, xs = np.where(window == 1)
     if len(xs) == 0:
         return None
@@ -145,6 +145,7 @@ def find_nearest_draw_pixel(draw_mask, x, y, radius=25):
 #  WEBSOCKET CLIENT
 # ============================================================
 
+
 def ws_connect():
     ws = websocket.WebSocket()
     ws.connect(WS_URL, timeout=5)
@@ -153,6 +154,7 @@ def ws_connect():
 
 
 def ws_send_cmd(ws, cmd):
+    print(f"WS cmd -> {cmd}")
     ws.send(f'{{"type":"cmd","cmd":"{cmd}"}}')
 
 
@@ -160,13 +162,14 @@ def ws_send_cmd(ws, cmd):
 #  MAIN PROGRAM
 # ============================================================
 
+
 def main():
     cap = cv2.VideoCapture(0)
     kalman = create_kalman()
 
-    png_overlay = cv2.imread("SVGimg.png", cv2.IMREAD_UNCHANGED)
+    png_overlay = cv2.imread(PNG_PATH, cv2.IMREAD_UNCHANGED)
     if png_overlay is None:
-        raise RuntimeError("Failed to load SVGimg.png")
+        raise RuntimeError(f"Failed to load {PNG_PATH}")
 
     lower_blue = np.array([90, 80, 50])
     upper_blue = np.array([130, 255, 255])
@@ -175,6 +178,8 @@ def main():
     ws = None
     last_cmd_ms = 0
     last_ping = 0
+    last_ws_attempt = 0
+    last_pen_state = None
 
     while True:
         ret, frame = cap.read()
@@ -184,10 +189,14 @@ def main():
         # Blue object detection
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
-        mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        mask_blue = cv2.morphologyEx(
+            mask_blue, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8)
+        )
         mask_blue = cv2.dilate(mask_blue, None, iterations=2)
 
-        contours, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(
+            mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
         measured = None
 
         if contours:
@@ -210,6 +219,7 @@ def main():
         # White canvas + overlay
         canvas_box, mask_white = detect_white_canvas(frame)
         draw_mask = None
+        desired_pen = None
 
         if canvas_box is not None:
             x, y, w, h = canvas_box
@@ -233,24 +243,34 @@ def main():
             now = int(time.time() * 1000)
             if now - last_cmd_ms > CMD_INTERVAL_MS:
                 # Connect WS if needed
-                if ws is None:
+                if ws is None and (time.time() - last_ws_attempt) > 2:
+                    last_ws_attempt = time.time()
                     try:
                         ws = ws_connect()
-                    except Exception:
+                        print(f"WS connected: {WS_URL}")
+                    except Exception as error:
+                        print(f"WS connect failed: {error}")
                         ws = None
                 if ws is not None:
                     try:
-                        ws_send_cmd(ws, desired_pen)
+                        if desired_pen != last_pen_state:
+                            ws_send_cmd(ws, desired_pen)
+                            last_pen_state = desired_pen
 
                         # Find a nearby draw pixel to move toward
-                        target = find_nearest_draw_pixel(draw_mask, local_x, local_y, radius=30)
+                        target = find_nearest_draw_pixel(
+                            draw_mask, local_x, local_y, radius=30
+                        )
                         if target is not None:
                             tx, ty = target
                             dx = tx - local_x
                             dy = ty - local_y
+                            cv2.circle(frame, (x + tx, y + ty), 6, (255, 0, 255), 2)
 
                             if abs(dx) > X_TURN_THRESHOLD:
-                                ws_send_cmd(ws, CMD_TURN_RIGHT if dx > 0 else CMD_TURN_LEFT)
+                                ws_send_cmd(
+                                    ws, CMD_TURN_RIGHT if dx > 0 else CMD_TURN_LEFT
+                                )
                             elif abs(dy) > Y_MOVE_THRESHOLD:
                                 # forward is negative y in the image
                                 forward = dy < 0 if FORWARD_IS_NEGATIVE_Y else dy > 0
@@ -267,10 +287,44 @@ def main():
             except Exception:
                 ws = None
 
+        # HUD text
+        ws_status = "connected" if ws is not None else "disconnected"
+        canvas_status = "yes" if canvas_box is not None else "no"
+        pen_status = "down" if desired_pen == CMD_PEN_DOWN else "up"
+        cv2.putText(
+            frame,
+            f"WS: {ws_status}",
+            (12, 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
+        )
+        cv2.putText(
+            frame,
+            f"Canvas: {canvas_status}",
+            (12, 46),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
+        )
+        cv2.putText(
+            frame,
+            f"Pen: {pen_status}",
+            (12, 70),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
+        )
+
         # Display
         cv2.imshow("Frame", frame)
         cv2.imshow("White Mask", mask_white)
         cv2.imshow("Blue Mask", mask_blue)
+        if draw_mask is not None:
+            cv2.imshow("Draw Mask", draw_mask * 255)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
