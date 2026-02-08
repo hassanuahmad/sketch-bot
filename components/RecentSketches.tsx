@@ -5,7 +5,8 @@ interface Sketch {
   id: string;
   name: string;
   timestamp: string;
-  thumbnail: boolean[][]; // simplified
+  thumbnail?: boolean[][]; // simplified
+  svgPath?: string;
 }
 
 interface RecentSketchesProps {
@@ -15,7 +16,24 @@ interface RecentSketchesProps {
 
 const THUMB_SIZE = 10;
 
-const SketchThumbnail: React.FC<{ grid: boolean[][] }> = ({ grid }) => {
+const SketchThumbnail: React.FC<{ grid?: boolean[][]; svgPath?: string }> = ({
+  grid,
+  svgPath,
+}) => {
+  if (!grid || grid.length === 0) {
+    return svgPath ? (
+      <img
+        src={svgPath}
+        alt="Sketch thumbnail"
+        className="pixel-canvas rounded-sm border border-border bg-background"
+        width={THUMB_SIZE * 4}
+        height={THUMB_SIZE * 4}
+      />
+    ) : (
+      <div className="pixel-canvas rounded-sm border border-border bg-muted w-[40px] h-[40px]" />
+    );
+  }
+
   const size = THUMB_SIZE;
   const cellSize = 4;
   const canvasSize = size * cellSize;
@@ -92,7 +110,10 @@ const RecentSketches: React.FC<RecentSketchesProps> = ({
                 onClick={() => onSelectSketch?.(sketch)}
                 className="flex items-center gap-3 w-full p-2 rounded-md hover:bg-secondary transition-colors text-left"
               >
-                <SketchThumbnail grid={sketch.thumbnail} />
+                <SketchThumbnail
+                  grid={sketch.thumbnail}
+                  svgPath={sketch.svgPath}
+                />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-foreground truncate">
                     {sketch.name}
