@@ -120,11 +120,11 @@ const RecentSketches: React.FC<RecentSketchesProps> = ({
       <div className="flex items-center gap-3 px-0 py-0">
         <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center shrink-0">
           <span className="text-primary-foreground font-bold text-sm font-mono">
-            SP
+            SB
           </span>
         </div>
         <span className="text-base font-semibold text-foreground tracking-tight">
-          SketchPro
+          SketchBot
         </span>
       </div>
 
