@@ -164,6 +164,50 @@ const Index: React.FC = () => {
     }, 500);
   }, [grid, sketches.length, loadSketches]);
 
+  const handleRenameSketch = useCallback(
+    async (sketchId: string, name: string) => {
+      setSketches((prev) =>
+        prev.map((sketch) =>
+          sketch.id === sketchId ? { ...sketch, name } : sketch,
+        ),
+      );
+      try {
+        const response = await fetch(`/api/sketches/${sketchId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        if (!response.ok) {
+          console.error("Failed to rename sketch", await response.text());
+          await loadSketches();
+        }
+      } catch (error) {
+        console.error("Error renaming sketch", error);
+        await loadSketches();
+      }
+    },
+    [loadSketches],
+  );
+
+  const handleDeleteSketch = useCallback(
+    async (sketchId: string) => {
+      setSketches((prev) => prev.filter((sketch) => sketch.id !== sketchId));
+      try {
+        const response = await fetch(`/api/sketches/${sketchId}`, {
+          method: "DELETE",
+        });
+        if (!response.ok) {
+          console.error("Failed to delete sketch", await response.text());
+          await loadSketches();
+        }
+      } catch (error) {
+        console.error("Error deleting sketch", error);
+        await loadSketches();
+      }
+    },
+    [loadSketches],
+  );
+
   const handleSelectSketch = useCallback(
     async (sketch: Sketch) => {
       if (activeTab === "pov") return;
@@ -193,10 +237,12 @@ const Index: React.FC = () => {
   return (
     <div className="flex h-screen bg-background overflow-hidden">
       {/* Left Sidebar - Recent Sketches */}
-      <aside className="w-64 shrink-0 p-3 border-r border-border hidden lg:flex flex-col">
+      <aside className="w-80 shrink-0 p-3 border-r border-border hidden lg:flex flex-col">
         <RecentSketches
           sketches={sketches}
           onSelectSketch={handleSelectSketch}
+          onRenameSketch={handleRenameSketch}
+          onDeleteSketch={handleDeleteSketch}
         />
       </aside>
 

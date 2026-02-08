@@ -1,5 +1,5 @@
 import React from "react";
-import { Clock, ImageIcon } from "lucide-react";
+import { Clock, ImageIcon, Pencil, Trash2 } from "lucide-react";
 
 interface Sketch {
   id: string;
@@ -12,6 +12,8 @@ interface Sketch {
 interface RecentSketchesProps {
   sketches: Sketch[];
   onSelectSketch?: (sketch: Sketch) => void;
+  onRenameSketch?: (sketchId: string, name: string) => void;
+  onDeleteSketch?: (sketchId: string) => void;
 }
 
 const THUMB_SIZE = 10;
@@ -75,13 +77,39 @@ const SketchThumbnail: React.FC<{ grid?: boolean[][]; svgPath?: string }> = ({
 const RecentSketches: React.FC<RecentSketchesProps> = ({
   sketches,
   onSelectSketch,
+  onRenameSketch,
+  onDeleteSketch,
 }) => {
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [draftName, setDraftName] = React.useState("");
+
+  const beginEdit = React.useCallback((sketch: Sketch) => {
+    setEditingId(sketch.id);
+    setDraftName(sketch.name);
+  }, []);
+
+  const cancelEdit = React.useCallback(() => {
+    setEditingId(null);
+    setDraftName("");
+  }, []);
+
+  const commitEdit = React.useCallback(() => {
+    if (!editingId) return;
+    const name = draftName.trim();
+    if (!name) return;
+    onRenameSketch?.(editingId, name);
+    setEditingId(null);
+    setDraftName("");
+  }, [draftName, editingId, onRenameSketch]);
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Logo */}
       <div className="flex items-center gap-3 px-0 py-0">
         <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center shrink-0">
-          <span className="text-primary-foreground font-bold text-sm font-mono">SP</span>
+          <span className="text-primary-foreground font-bold text-sm font-mono">
+            SP
+          </span>
         </div>
         <span className="text-base font-semibold text-foreground tracking-tight">
           SketchPro
@@ -105,24 +133,75 @@ const RecentSketches: React.FC<RecentSketchesProps> = ({
             </div>
           ) : (
             sketches.map((sketch) => (
-              <button
+              <div
                 key={sketch.id}
-                onClick={() => onSelectSketch?.(sketch)}
-                className="flex items-center gap-3 w-full p-2 rounded-md hover:bg-secondary transition-colors text-left"
+                className="flex items-center gap-2 w-full p-2 rounded-md hover:bg-secondary transition-colors"
               >
-                <SketchThumbnail
-                  grid={sketch.thumbnail}
-                  svgPath={sketch.svgPath}
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-foreground truncate">
-                    {sketch.name}
-                  </p>
-                  <p className="text-[10px] font-mono text-muted-foreground">
-                    {sketch.timestamp}
-                  </p>
-                </div>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectSketch?.(sketch)}
+                  className="flex items-center gap-4 flex-1 min-w-0 text-left"
+                >
+                  <SketchThumbnail
+                    grid={sketch.thumbnail}
+                    svgPath={sketch.svgPath}
+                  />
+                  <div className="flex-1 min-w-0 text-left">
+                    {editingId === sketch.id ? (
+                      <input
+                        value={draftName}
+                        onChange={(event) => setDraftName(event.target.value)}
+                        onBlur={commitEdit}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            commitEdit();
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            cancelEdit();
+                          }
+                        }}
+                        className="w-full rounded-sm bg-background border border-border px-2 py-1 text-sm font-medium text-foreground"
+                        autoFocus
+                      />
+                    ) : (
+                      <p className="text-sm font-medium text-foreground truncate">
+                        {sketch.name}
+                      </p>
+                    )}
+                    <p className="text-[10px] font-mono text-muted-foreground">
+                      {sketch.timestamp}
+                    </p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  aria-label="Edit sketch name"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (editingId === sketch.id) {
+                      commitEdit();
+                    } else {
+                      beginEdit(sketch);
+                    }
+                  }}
+                  className="ml-auto inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-secondary"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Delete sketch"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDeleteSketch?.(sketch.id);
+                  }}
+                  className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-secondary"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             ))
           )}
         </div>
