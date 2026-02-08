@@ -114,9 +114,8 @@ const Index: React.FC = () => {
   } = usePixelCanvas();
 
   const [activeTab, setActiveTab] = useState<"canvas" | "pov">("canvas");
-  const [isConnected, setIsConnected] = useState(false);
-  const [carName, setCarName] = useState("Car 1");
-  const wsRef = React.useRef<WebSocket | null>(null);
+  const [isConnected] = useState(false);
+  const [carName] = useState("Car 1");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -124,7 +123,7 @@ const Index: React.FC = () => {
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
   const [sketchName, setSketchName] = useState("");
   const [activeSketchId, setActiveSketchId] = useState<string | null>(null);
-  const [povFrame, setPovFrame] = useState<string | null>(null);
+  const [povFrame] = useState<string | null>(null);
 
   const loadSketches = useCallback(async () => {
     try {
@@ -150,56 +149,7 @@ const Index: React.FC = () => {
     void loadSketches();
   }, [loadSketches]);
 
-  useEffect(() => {
-    const wsUrl =
-      process.env.NEXT_PUBLIC_WS_URL ||
-      `ws://${window.location.hostname}:3001`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.addEventListener("open", () => {
-      ws.send(
-        JSON.stringify({ type: "register", role: "ui", client: "web" }),
-      );
-    });
-
-    ws.addEventListener("message", (event) => {
-      let data: any;
-      try {
-        data = JSON.parse(String(event.data));
-      } catch {
-        return;
-      }
-
-      if (data.type === "status") {
-        setIsConnected(Boolean(data.carOnline));
-        if (data.carName) {
-          const name = String(data.carName);
-          setCarName(name === "ESP32" ? "Car 1" : name);
-        }
-        return;
-      }
-
-      if (data.type === "vision_frame" && data.data) {
-        const format = data.format || "jpeg";
-        setPovFrame(`data:image/${format};base64,${data.data}`);
-        return;
-      }
-    });
-
-    ws.addEventListener("close", () => {
-      setIsConnected(false);
-    });
-
-    ws.addEventListener("error", () => {
-      setIsConnected(false);
-    });
-
-    return () => {
-      ws.close();
-      wsRef.current = null;
-    };
-  }, []);
+  // WebSocket integration is disabled for production.
 
   const isDrawingMode = activeTab === "canvas" && !isSubmitting;
 
@@ -244,11 +194,8 @@ const Index: React.FC = () => {
   }, [isSaving, isSubmitting, saveSketch, sketchName]);
 
   const sendSketchToRobot = useCallback(() => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    ws.send(JSON.stringify({ type: "sketch", sketch: grid }));
-    return true;
-  }, [grid]);
+    return false;
+  }, []);
 
   const handleSaveAndSubmit = useCallback(async () => {
     if (isSaving || isSubmitting) return;
