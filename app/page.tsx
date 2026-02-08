@@ -124,6 +124,7 @@ const Index: React.FC = () => {
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
   const [sketchName, setSketchName] = useState("");
   const [activeSketchId, setActiveSketchId] = useState<string | null>(null);
+  const [povFrame, setPovFrame] = useState<string | null>(null);
 
   const loadSketches = useCallback(async () => {
     try {
@@ -176,6 +177,13 @@ const Index: React.FC = () => {
           const name = String(data.carName);
           setCarName(name === "ESP32" ? "Car 1" : name);
         }
+        return;
+      }
+
+      if (data.type === "vision_frame" && data.data) {
+        const format = data.format || "jpeg";
+        setPovFrame(`data:image/${format};base64,${data.data}`);
+        return;
       }
     });
 
@@ -457,7 +465,7 @@ const Index: React.FC = () => {
                 disabled={!isDrawingMode}
               />
             ) : (
-              <POVView isActive={activeTab === "pov"} />
+              <POVView isActive={activeTab === "pov"} frameSrc={povFrame} />
             )}
           </div>
 

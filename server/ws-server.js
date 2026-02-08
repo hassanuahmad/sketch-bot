@@ -6,6 +6,7 @@ const wss = new WebSocket.Server({ port: PORT, host: "0.0.0.0" });
 let carClient = null;
 let carName = "ESP32";
 const uiClients = new Set();
+const visionClients = new Set();
 
 function safeSend(ws, message) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -46,6 +47,13 @@ function registerClient(ws, data) {
   if (role === "ui") {
     ws.role = "ui";
     uiClients.add(ws);
+    sendStatus(ws);
+    return;
+  }
+
+  if (role === "vision") {
+    ws.role = "vision";
+    visionClients.add(ws);
     sendStatus(ws);
     return;
   }
@@ -117,6 +125,16 @@ wss.on("connection", (ws, req) => {
       return;
     }
 
+    if (data.type === "vision_frame" && (ws.role === "vision" || ws.role === "ui")) {
+      broadcastToUi({
+        type: "vision_frame",
+        format: data.format || "jpeg",
+        data: data.data,
+        ts: Date.now(),
+      });
+      return;
+    }
+
     if (data.type === "ping") {
       safeSend(ws, { type: "pong" });
       return;
@@ -128,6 +146,7 @@ wss.on("connection", (ws, req) => {
   ws.on("close", () => {
     console.log("WS client disconnected");
     if (uiClients.has(ws)) uiClients.delete(ws);
+    if (visionClients.has(ws)) visionClients.delete(ws);
     if (carClient === ws) {
       carClient = null;
       sendStatus();
@@ -137,6 +156,7 @@ wss.on("connection", (ws, req) => {
   ws.on("error", (err) => {
     console.error("WS client error", err?.message || err);
     if (uiClients.has(ws)) uiClients.delete(ws);
+    if (visionClients.has(ws)) visionClients.delete(ws);
     if (carClient === ws) {
       carClient = null;
       sendStatus();

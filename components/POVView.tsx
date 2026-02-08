@@ -3,9 +3,10 @@ import { Camera, Loader2 } from "lucide-react";
 
 interface POVViewProps {
   isActive: boolean;
+  frameSrc?: string | null;
 }
 
-const POVView: React.FC<POVViewProps> = ({ isActive }) => {
+const POVView: React.FC<POVViewProps> = ({ isActive, frameSrc }) => {
   if (!isActive) return null;
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -103,12 +104,20 @@ const POVView: React.FC<POVViewProps> = ({ isActive }) => {
         backgroundImage: "repeating-linear-gradient(0deg, transparent, transparent 2px, hsl(210, 20%, 92%) 2px, hsl(210, 20%, 92%) 3px)",
       }} />
 
-      <video
-        ref={videoRef}
-        className="absolute inset-0 w-full h-full object-cover"
-        playsInline
-        muted
-      />
+      {frameSrc ? (
+        <img
+          src={frameSrc}
+          alt="Vision Stream"
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          className="absolute inset-0 w-full h-full object-cover"
+          playsInline
+          muted
+        />
+      )}
 
       <div className="absolute top-3 left-3 right-3 flex items-center gap-2 z-20">
         <select
@@ -136,7 +145,7 @@ const POVView: React.FC<POVViewProps> = ({ isActive }) => {
         <div className="ml-auto flex items-center gap-2 px-2 py-1 bg-secondary rounded-full">
           <div className="w-2 h-2 rounded-full bg-primary animate-pulse-slow" />
           <span className="text-[10px] font-mono uppercase tracking-wider text-primary">
-            Live
+            {frameSrc ? "Vision" : "Live"}
           </span>
         </div>
       </div>

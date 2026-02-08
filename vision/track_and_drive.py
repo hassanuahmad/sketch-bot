@@ -1,3 +1,5 @@
+import base64
+import json
 import time
 
 import cv2
@@ -10,6 +12,9 @@ import websocket
 WS_URL = "ws://172.24.21.89:3001"
 PNG_PATH = "/Users/hassanuahmad/Desktop/sketch-bot/public/sketches/latest.png"
 PING_INTERVAL_S = 5
+STREAM_FPS = 8
+STREAM_WIDTH = 640
+STREAM_JPEG_QUALITY = 70
 
 # Command timing and thresholds (image pixels)
 CMD_INTERVAL_MS = 120
@@ -54,8 +59,15 @@ def create_kalman():
 def overlay_image_alpha(background, overlay, x, y):
     h, w = overlay.shape[:2]
 
-    if y + h > background.shape[0] or x + w > background.shape[1]:
+    if x < 0 or y < 0:
         return
+    if y + h > background.shape[0] or x + w > background.shape[1]:
+        # Clamp overlay to background bounds.
+        h = min(h, background.shape[0] - y)
+        w = min(w, background.shape[1] - x)
+        if h <= 0 or w <= 0:
+            return
+        overlay = overlay[:h, :w]
 
     if overlay.shape[2] == 4:
         alpha = overlay[:, :, 3] / 255.0
@@ -77,23 +89,51 @@ def overlay_image_alpha(background, overlay, x, y):
 
 
 def detect_white_canvas(frame):
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    lower_white = np.array([0, 0, 160])
-    upper_white = np.array([180, 40, 255])
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    mask = cv2.inRange(hsv, lower_white, upper_white)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-    mask = cv2.dilate(mask, None, iterations=2)
+    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
 
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 40, 120)
 
-    if not contours:
-        return None, mask
+    kernel = np.ones((5, 5), np.uint8)
+    edges = cv2.dilate(edges, kernel, iterations=2)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
 
-    largest = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(largest)
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
-    return (x, y, w, h), mask
+    best_quad = None
+    best_score = 0
+
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 30000:
+            continue
+
+        peri = cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+
+        if len(approx) != 4:
+            continue
+
+        x, y, w, h = cv2.boundingRect(approx)
+        aspect = w / float(h)
+        if not (0.4 < aspect < 2.5):
+            continue
+
+        cx = x + w / 2
+        cy = y + h / 2
+        frame_h, frame_w = frame.shape[:2]
+        center_dist = abs(cx - frame_w / 2) + abs(cy - frame_h / 2)
+
+        score = area - center_dist
+
+        if score > best_score:
+            best_score = score
+            best_quad = approx.reshape(4, 2)
+
+    return best_quad, edges
 
 
 # ============================================================
@@ -149,7 +189,7 @@ def find_nearest_draw_pixel(draw_mask, x, y, radius=25):
 def ws_connect():
     ws = websocket.WebSocket()
     ws.connect(WS_URL, timeout=5)
-    ws.send('{"type":"register","role":"ui","client":"vision"}')
+    ws.send('{"type":"register","role":"vision","client":"vision"}')
     return ws
 
 
@@ -171,22 +211,27 @@ def main():
     if png_overlay is None:
         raise RuntimeError(f"Failed to load {PNG_PATH}")
 
-    lower_blue = np.array([90, 80, 50])
-    upper_blue = np.array([130, 255, 255])
-    MIN_AREA = 500
+    lower_blue = np.array([85, 50, 40])
+    upper_blue = np.array([140, 255, 255])
+    MIN_AREA = 300
 
     ws = None
     last_cmd_ms = 0
     last_ping = 0
     last_ws_attempt = 0
     last_pen_state = None
+    last_stream_ts = 0.0
+
+    canvas_locked = False
+    canvas_poly = None
+    prev_gray = None
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # Blue object detection
+        # Blue object detection (raw frame)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
         mask_blue = cv2.morphologyEx(
@@ -198,32 +243,64 @@ def main():
             mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
         measured = None
+        blue_center = None
+        x_b = y_b = w_b = h_b = 0
 
         if contours:
             largest = max(contours, key=cv2.contourArea)
             if cv2.contourArea(largest) > MIN_AREA:
-                x, y, w, h = cv2.boundingRect(largest)
-                cx = x + w // 2
-                cy = y + h // 2
-                measured = np.array([[np.float32(cx)], [np.float32(cy)]])
-                kalman.correct(measured)
-
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
+                x_b, y_b, w_b, h_b = cv2.boundingRect(largest)
+                cx = x_b + w_b // 2
+                cy = y_b + h_b // 2
+                blue_center = (cx, cy)
 
         prediction = kalman.predict()
         px = int(prediction[0, 0])
         py = int(prediction[1, 0])
         cv2.circle(frame, (px, py), 8, (0, 255, 0), 2)
 
-        # White canvas + overlay
-        canvas_box, mask_white = detect_white_canvas(frame)
+        # Canvas detection + tracking
+        canvas_edges = None
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        if not canvas_locked:
+            detected_poly, canvas_edges = detect_white_canvas(frame)
+
+            if detected_poly is not None:
+                canvas_poly = detected_poly.astype(np.float32)
+                canvas_locked = True
+                prev_gray = gray.copy()
+        else:
+            new_pts, status, _ = cv2.calcOpticalFlowPyrLK(
+                prev_gray,
+                gray,
+                canvas_poly.reshape(-1, 1, 2),
+                None,
+                winSize=(21, 21),
+                maxLevel=3,
+                criteria=(
+                    cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+                    30,
+                    0.01,
+                ),
+            )
+
+            if status.sum() == 4:
+                canvas_poly = new_pts.reshape(4, 2)
+            else:
+                canvas_locked = False
+
+            prev_gray = gray.copy()
+
+        canvas_box = None
         draw_mask = None
         desired_pen = None
 
-        if canvas_box is not None:
-            x, y, w, h = canvas_box
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        if canvas_locked and canvas_poly is not None:
+            cv2.polylines(frame, [canvas_poly.astype(int)], True, (0, 255, 0), 2)
+
+            x, y, w, h = cv2.boundingRect(canvas_poly.astype(int))
+            canvas_box = (x, y, w, h)
 
             resized_png = cv2.resize(png_overlay, (w, h))
             overlay_image_alpha(frame, resized_png, x, y)
@@ -239,6 +316,18 @@ def main():
                 cv2.circle(frame, (px, py), 10, (255, 255, 255), 2)
             else:
                 desired_pen = CMD_PEN_UP
+
+            # Only update blue detection if inside canvas
+            if blue_center is not None:
+                inside = cv2.pointPolygonTest(canvas_poly, blue_center, False) >= 0
+                if inside:
+                    cx, cy = blue_center
+                    measured = np.array([[np.float32(cx)], [np.float32(cy)]])
+                    kalman.correct(measured)
+                    cv2.rectangle(
+                        frame, (x_b, y_b), (x_b + w_b, y_b + h_b), (0, 0, 255), 2
+                    )
+                    cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
 
             now = int(time.time() * 1000)
             if now - last_cmd_ms > CMD_INTERVAL_MS:
@@ -321,10 +410,34 @@ def main():
 
         # Display
         cv2.imshow("Frame", frame)
-        cv2.imshow("White Mask", mask_white)
+        if not canvas_locked and canvas_edges is not None:
+            cv2.imshow("Canvas Edges", canvas_edges)
         cv2.imshow("Blue Mask", mask_blue)
         if draw_mask is not None:
             cv2.imshow("Draw Mask", draw_mask * 255)
+
+        # Stream annotated frame to UI (MJPEG over WS)
+        if ws is not None and (time.time() - last_stream_ts) > (1 / STREAM_FPS):
+            try:
+                h, w = frame.shape[:2]
+                target_w = min(STREAM_WIDTH, w)
+                target_h = int(h * (target_w / w))
+                resized = cv2.resize(frame, (target_w, target_h))
+                ok, buf = cv2.imencode(
+                    ".jpg",
+                    resized,
+                    [cv2.IMWRITE_JPEG_QUALITY, STREAM_JPEG_QUALITY],
+                )
+                if ok:
+                    payload = {
+                        "type": "vision_frame",
+                        "format": "jpeg",
+                        "data": base64.b64encode(buf).decode("ascii"),
+                    }
+                    ws.send(json.dumps(payload))
+                    last_stream_ts = time.time()
+            except Exception:
+                ws = None
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
