@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useCallback, useEffect } from "react";
-import { Monitor, Eye, Send } from "lucide-react";
+import { Monitor, Eye, Send, Plus } from "lucide-react";
 import ConnectionStatus from "@/components/ConnectionStatus";
 import PixelCanvas from "@/components/PixelCanvas";
 import Toolbar from "@/components/Toolbar";
@@ -9,8 +9,16 @@ import ChatPanel from "@/components/ChatPanel";
 import RecentSketches, { type Sketch } from "@/components/RecentSketches";
 import POVView from "@/components/POVView";
 import {
-  usePixelCanvas,
-} from "@/hooks/usePixelCanvas";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { usePixelCanvas } from "@/hooks/usePixelCanvas";
 import { gridToSvg } from "@/lib/svg";
 
 type SketchResponse = {
@@ -108,8 +116,12 @@ const Index: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"canvas" | "pov">("canvas");
   const [isConnected] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [sketches, setSketches] = useState<Sketch[]>([]);
+  const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
+  const [sketchName, setSketchName] = useState("");
+  const [activeSketchId, setActiveSketchId] = useState<string | null>(null);
 
   const loadSketches = useCallback(async () => {
     try {
@@ -137,33 +149,80 @@ const Index: React.FC = () => {
 
   const isDrawingMode = activeTab === "canvas" && !isSubmitting;
 
-  const handleSubmit = useCallback(async () => {
-    setIsSubmitting(true);
-
-    const newSketchName = `Sketch ${sketches.length + 1}`;
-
-    try {
-      const svg = gridToSvg(grid);
-      const response = await fetch("/api/sketches", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newSketchName, svg }),
-      });
-      if (!response.ok) {
-        console.error("Failed to save sketch", await response.text());
-      } else {
+  const saveSketch = useCallback(
+    async (name: string) => {
+      const trimmed = name.trim();
+      const resolvedName = trimmed || `Sketch ${sketches.length + 1}`;
+      try {
+        const svg = gridToSvg(grid);
+        const response = await fetch("/api/sketches", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: resolvedName, svg }),
+        });
+        if (!response.ok) {
+          console.error("Failed to save sketch", await response.text());
+          return false;
+        }
         await loadSketches();
+        return true;
+      } catch (error) {
+        console.error("Error saving sketch", error);
+        return false;
       }
-    } catch (error) {
-      console.error("Error saving sketch", error);
-    }
+    },
+    [grid, sketches.length, loadSketches],
+  );
 
+  const handleOpenSaveDialog = useCallback(() => {
+    setSketchName(
+      activeSketchId ? sketchName : `Sketch ${sketches.length + 1}`,
+    );
+    setIsSaveDialogOpen(true);
+  }, [activeSketchId, sketchName, sketches.length]);
+
+  const handleSaveOnly = useCallback(async () => {
+    if (isSaving || isSubmitting) return;
+    setIsSaving(true);
+    const ok = await saveSketch(sketchName);
+    setIsSaving(false);
+    if (ok) setIsSaveDialogOpen(false);
+  }, [isSaving, isSubmitting, saveSketch, sketchName]);
+
+  const handleSaveAndSubmit = useCallback(async () => {
+    if (isSaving || isSubmitting) return;
+    setIsSubmitting(true);
+    setIsSaving(true);
+    const ok = await saveSketch(sketchName);
+    setIsSaving(false);
+    if (!ok) {
+      setIsSubmitting(false);
+      return;
+    }
+    setIsSaveDialogOpen(false);
     // Switch to POV tab
     setTimeout(() => {
       setActiveTab("pov");
       setIsSubmitting(false);
     }, 500);
-  }, [grid, sketches.length, loadSketches]);
+  }, [isSaving, isSubmitting, saveSketch, sketchName]);
+
+  const handleSubmitWithoutSave = useCallback(() => {
+    if (isSaving || isSubmitting) return;
+    setIsSubmitting(true);
+    setIsSaveDialogOpen(false);
+    setTimeout(() => {
+      setActiveTab("pov");
+      setIsSubmitting(false);
+    }, 500);
+  }, [isSaving, isSubmitting]);
+
+  const handleNewSketch = useCallback(() => {
+    clearCanvas();
+    setActiveTab("canvas");
+    setActiveSketchId(null);
+    setSketchName(`Sketch ${sketches.length + 1}`);
+  }, [clearCanvas, sketches.length]);
 
   const handleRenameSketch = useCallback(
     async (sketchId: string, name: string) => {
@@ -228,6 +287,8 @@ const Index: React.FC = () => {
         if (parsedGrid) {
           setGrid(parsedGrid);
         }
+        setActiveSketchId(sketch.id);
+        setSketchName(sketch.name);
       } catch (error) {
         console.error("Error loading sketch SVG", error);
       }
@@ -306,19 +367,28 @@ const Index: React.FC = () => {
             </button>
           </div>
 
-          {/* Submit */}
+          {/* Save / Submit */}
           <button
-            onClick={handleSubmit}
-            disabled={activeTab === "pov" || isSubmitting}
+            onClick={handleOpenSaveDialog}
+            disabled={activeTab === "pov" || isSubmitting || isSaving}
             className={`hidden lg:flex items-center gap-2 px-5 py-2 rounded-lg font-semibold text-sm transition-all ml-auto ${
-              activeTab === "pov" || isSubmitting
+              activeTab === "pov" || isSubmitting || isSaving
                 ? "bg-muted text-muted-foreground cursor-not-allowed"
                 : "bg-primary text-primary-foreground hover:opacity-90 glow-green"
             }`}
           >
             <Send className="w-4 h-4" />
-            {isSubmitting ? "Sending..." : "Submit to Robot"}
+            {isSubmitting ? "Sending..." : "Save / Send"}
           </button>
+          <Button
+            variant="outline"
+            className="hidden lg:flex items-center justify-center ml-0 px-3"
+            onClick={handleNewSketch}
+            disabled={isSubmitting || isSaving}
+            aria-label="New sketch"
+          >
+            <Plus className="w-4 h-4" />
+          </Button>
         </div>
 
         {/* Canvas / POV Area */}
@@ -355,18 +425,89 @@ const Index: React.FC = () => {
         />
 
         {/* Mobile Submit Button */}
-        <button
-          onClick={handleSubmit}
-          disabled={activeTab === "pov" || isSubmitting}
-          className={`lg:hidden w-full py-3 px-4 rounded-lg font-semibold text-sm transition-all ${
-            activeTab === "pov" || isSubmitting
-              ? "bg-muted text-muted-foreground cursor-not-allowed"
-              : "bg-primary text-primary-foreground glow-green"
-          }`}
-        >
-          {isSubmitting ? "Sending..." : "Submit to Robot"}
-        </button>
+        <div className="lg:hidden flex gap-2">
+          <button
+            onClick={handleOpenSaveDialog}
+            disabled={activeTab === "pov" || isSubmitting || isSaving}
+            className={`flex-1 py-3 px-4 rounded-lg font-semibold text-sm transition-all ${
+              activeTab === "pov" || isSubmitting || isSaving
+                ? "bg-muted text-muted-foreground cursor-not-allowed"
+                : "bg-primary text-primary-foreground glow-green"
+            }`}
+          >
+            {isSubmitting ? "Sending..." : "Save / Send"}
+          </button>
+          <Button
+            variant="outline"
+            className="px-3"
+            onClick={handleNewSketch}
+            disabled={isSubmitting || isSaving}
+            aria-label="New sketch"
+          >
+            <Plus className="w-4 h-4" />
+          </Button>
+        </div>
       </main>
+
+      <Dialog open={isSaveDialogOpen} onOpenChange={setIsSaveDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save sketch</DialogTitle>
+            <DialogDescription>
+              Name your sketch, then choose how to proceed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label
+              className="text-sm font-medium text-foreground"
+              htmlFor="sketch-name"
+            >
+              Sketch name
+            </label>
+            <Input
+              id="sketch-name"
+              value={sketchName}
+              onChange={(event) => setSketchName(event.target.value)}
+              placeholder="Sketch name"
+            />
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            {activeSketchId ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={handleSaveOnly}
+                  disabled={isSaving || isSubmitting}
+                >
+                  {isSaving ? "Saving..." : "Save as New"}
+                </Button>
+                <Button
+                  onClick={handleSubmitWithoutSave}
+                  disabled={isSaving || isSubmitting}
+                >
+                  {isSubmitting ? "Sending..." : "Submit to Robot"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={handleSaveOnly}
+                  disabled={isSaving || isSubmitting}
+                >
+                  {isSaving ? "Saving..." : "Save"}
+                </Button>
+                <Button
+                  onClick={handleSaveAndSubmit}
+                  disabled={isSaving || isSubmitting}
+                >
+                  {isSubmitting ? "Sending..." : "Save & Submit"}
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

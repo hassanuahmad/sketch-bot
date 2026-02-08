@@ -1,5 +1,16 @@
 import React from "react";
 import { Clock, ImageIcon, Pencil, Trash2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { buttonVariants } from "@/components/ui/button";
 
 interface Sketch {
   id: string;
@@ -82,6 +93,7 @@ const RecentSketches: React.FC<RecentSketchesProps> = ({
 }) => {
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [draftName, setDraftName] = React.useState("");
+  const [pendingDelete, setPendingDelete] = React.useState<Sketch | null>(null);
 
   const beginEdit = React.useCallback((sketch: Sketch) => {
     setEditingId(sketch.id);
@@ -195,7 +207,7 @@ const RecentSketches: React.FC<RecentSketchesProps> = ({
                   aria-label="Delete sketch"
                   onClick={(event) => {
                     event.stopPropagation();
-                    onDeleteSketch?.(sketch.id);
+                    setPendingDelete(sketch);
                   }}
                   className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-secondary"
                 >
@@ -206,6 +218,39 @@ const RecentSketches: React.FC<RecentSketchesProps> = ({
           )}
         </div>
       </div>
+
+      <AlertDialog
+        open={Boolean(pendingDelete)}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete sketch?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete{" "}
+              <span className="font-semibold text-foreground">
+                {pendingDelete?.name || "this sketch"}
+              </span>
+              ? This can’t be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              onClick={() => {
+                if (!pendingDelete) return;
+                onDeleteSketch?.(pendingDelete.id);
+                setPendingDelete(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
