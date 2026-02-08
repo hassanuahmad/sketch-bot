@@ -17,18 +17,17 @@ STREAM_WIDTH = 640
 STREAM_JPEG_QUALITY = 70
 
 # Command timing and thresholds (image pixels)
-CMD_INTERVAL_MS = 120
-X_TURN_THRESHOLD = 12
-Y_MOVE_THRESHOLD = 12
+CMD_INTERVAL_MS = 150
+X_TURN_THRESHOLD = 14
+Y_MOVE_THRESHOLD = 14
+MOVE_MS = 140
+TURN_MS = 120
 
 # Movement command names (must match firmware)
-CMD_TURN_LEFT = "left_micro_slow"
-CMD_TURN_RIGHT = "right_micro_slow"
-CMD_FORWARD = "forward_micro_slow"
-CMD_BACK = "back_micro_slow"
-
-CMD_PEN_UP = "pen_up"
-CMD_PEN_DOWN = "pen_down"
+CMD_TURN_LEFT = "left"
+CMD_TURN_RIGHT = "right"
+CMD_FORWARD = "forward"
+CMD_BACK = "backward"
 
 # Interpret camera axes: assume forward = toward smaller y (up in image)
 FORWARD_IS_NEGATIVE_Y = True
@@ -193,9 +192,9 @@ def ws_connect():
     return ws
 
 
-def ws_send_cmd(ws, cmd):
-    print(f"WS cmd -> {cmd}")
-    ws.send(f'{{"type":"cmd","cmd":"{cmd}"}}')
+def ws_send_cmd(ws, cmd, ms):
+    print(f"WS cmd -> {cmd} {ms}ms")
+    ws.send(f'{{"type":"cmd","cmd":"{cmd}","ms":{ms}}}')
 
 
 # ============================================================
@@ -219,7 +218,6 @@ def main():
     last_cmd_ms = 0
     last_ping = 0
     last_ws_attempt = 0
-    last_pen_state = None
     last_stream_ts = 0.0
 
     canvas_locked = False
@@ -310,12 +308,12 @@ def main():
             local_x = px - x
             local_y = py - y
 
-            # Decide pen state
+            # Decide pen state (visual only; firmware keeps pen down)
             if draw_mask is not None and is_draw_pixel(draw_mask, local_x, local_y):
-                desired_pen = CMD_PEN_DOWN
+                desired_pen = "down"
                 cv2.circle(frame, (px, py), 10, (255, 255, 255), 2)
             else:
-                desired_pen = CMD_PEN_UP
+                desired_pen = "up"
 
             # Only update blue detection if inside canvas
             if blue_center is not None:
@@ -342,10 +340,6 @@ def main():
                         ws = None
                 if ws is not None:
                     try:
-                        if desired_pen != last_pen_state:
-                            ws_send_cmd(ws, desired_pen)
-                            last_pen_state = desired_pen
-
                         # Find a nearby draw pixel to move toward
                         target = find_nearest_draw_pixel(
                             draw_mask, local_x, local_y, radius=30
@@ -358,12 +352,18 @@ def main():
 
                             if abs(dx) > X_TURN_THRESHOLD:
                                 ws_send_cmd(
-                                    ws, CMD_TURN_RIGHT if dx > 0 else CMD_TURN_LEFT
+                                    ws,
+                                    CMD_TURN_RIGHT if dx > 0 else CMD_TURN_LEFT,
+                                    TURN_MS,
                                 )
                             elif abs(dy) > Y_MOVE_THRESHOLD:
                                 # forward is negative y in the image
                                 forward = dy < 0 if FORWARD_IS_NEGATIVE_Y else dy > 0
-                                ws_send_cmd(ws, CMD_FORWARD if forward else CMD_BACK)
+                                ws_send_cmd(
+                                    ws,
+                                    CMD_FORWARD if forward else CMD_BACK,
+                                    MOVE_MS,
+                                )
                     except Exception:
                         ws = None
                 last_cmd_ms = now
@@ -379,7 +379,7 @@ def main():
         # HUD text
         ws_status = "connected" if ws is not None else "disconnected"
         canvas_status = "yes" if canvas_box is not None else "no"
-        pen_status = "down" if desired_pen == CMD_PEN_DOWN else "up"
+        pen_status = "down" if desired_pen == "down" else "up"
         cv2.putText(
             frame,
             f"WS: {ws_status}",

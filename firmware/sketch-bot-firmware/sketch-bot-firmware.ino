@@ -40,13 +40,13 @@ Servo penServo;
 const int SERVO_MIN_US = 500;
 const int SERVO_MAX_US = 2400;
 const int PEN_UP_ANGLE = 120;
-const int PEN_DOWN_ANGLE = 60;
+const int PEN_DOWN_ANGLE = 120;
 const uint16_t PEN_MOVE_DELAY_MS = 140;
 
 // ---------------- Motion tuning -----------------------
 int SPEED_MOVE = 255;       // 0..255
 int SPEED_TURN = 255;       // 0..255
-int SPEED_MOVE_SLOW = 140;  // slower, more controllable
+int SPEED_MOVE_SLOW = 110;  // slower, more controllable
 int SPEED_TURN_SLOW = 140;  // slower, more controllable
 
 uint32_t MOVE_MS  = 800;
@@ -58,6 +58,22 @@ const uint32_t MICRO_STEP_MS = 25;
 const uint32_t TURN_STEP_MS = 40;
 const uint32_t TURN_MICRO_STEP_MS = 20;
 const uint32_t CORNER_APPROACH_MS = 50;
+// Demo-only: approximate time to move ~2 feet forward.
+// Tune this for your surface/voltage if needed.
+const uint32_t DEMO_FORWARD_MS = 600;
+
+void drawSquareDemo() {
+  penDown();
+  moveTimed(forward, MOVE_MS, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+  moveTimed(right,   TURN_MS, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+  moveTimed(forward, MOVE_MS, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+  moveTimed(right,   TURN_MS, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+  moveTimed(forward, MOVE_MS, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+  moveTimed(right,   TURN_MS, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+  moveTimed(forward, MOVE_MS, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+  moveTimed(right,   TURN_MS, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+  // Keep pen down after demo (hackathon requirement).
+}
 
 // ---------------- WiFi / WebSocket --------------------
 const char* WIFI_SSID     = "AhmadSamsung";
@@ -248,36 +264,44 @@ void sendRegister() {
   webSocket.sendTXT(msg);
 }
 
+int parseMsValue(const String& message) {
+  int idx = message.indexOf("\"ms\":");
+  if (idx < 0) return -1;
+  idx += 5;
+  while (idx < (int)message.length() && (message[idx] == ' ' || message[idx] == '\t')) idx++;
+  int value = 0;
+  bool any = false;
+  while (idx < (int)message.length() && isDigit(message[idx])) {
+    value = value * 10 + (message[idx] - '0');
+    idx++;
+    any = true;
+  }
+  return any ? value : -1;
+}
+
 void handleTextMessage(const String& message) {
   Serial.print("WS text: ");
   Serial.println(message);
 
-  // very basic string matching commands
-  if (message.indexOf("\"cmd\":\"forward_step\"") >= 0) { forwardStep(); return; }
-  if (message.indexOf("\"cmd\":\"back_step\"") >= 0) { backStep(); return; }
-  if (message.indexOf("\"cmd\":\"left_step\"") >= 0) { leftStep(); return; }
-  if (message.indexOf("\"cmd\":\"right_step\"") >= 0) { rightStep(); return; }
+  int ms = parseMsValue(message);
+  if (ms <= 0) ms = 0;
 
-  if (message.indexOf("\"cmd\":\"forward_micro\"") >= 0) { forwardMicro(); return; }
-  if (message.indexOf("\"cmd\":\"back_micro\"") >= 0) { backMicro(); return; }
-  if (message.indexOf("\"cmd\":\"left_micro\"") >= 0) { leftMicro(); return; }
-  if (message.indexOf("\"cmd\":\"right_micro\"") >= 0) { rightMicro(); return; }
-
-  if (message.indexOf("\"cmd\":\"forward_step_slow\"") >= 0) { forwardStepSlow(); return; }
-  if (message.indexOf("\"cmd\":\"back_step_slow\"") >= 0) { backStepSlow(); return; }
-  if (message.indexOf("\"cmd\":\"left_step_slow\"") >= 0) { leftStepSlow(); return; }
-  if (message.indexOf("\"cmd\":\"right_step_slow\"") >= 0) { rightStepSlow(); return; }
-
-  if (message.indexOf("\"cmd\":\"forward_micro_slow\"") >= 0) { forwardMicroSlow(); return; }
-  if (message.indexOf("\"cmd\":\"back_micro_slow\"") >= 0) { backMicroSlow(); return; }
-  if (message.indexOf("\"cmd\":\"left_micro_slow\"") >= 0) { leftMicroSlow(); return; }
-  if (message.indexOf("\"cmd\":\"right_micro_slow\"") >= 0) { rightMicroSlow(); return; }
-
-  if (message.indexOf("\"cmd\":\"corner_left\"") >= 0) { cornerLeft(); return; }
-  if (message.indexOf("\"cmd\":\"corner_right\"") >= 0) { cornerRight(); return; }
-
-  if (message.indexOf("\"cmd\":\"pen_up\"") >= 0) { penUp(); return; }
-  if (message.indexOf("\"cmd\":\"pen_down\"") >= 0) { penDown(); return; }
+  if (message.indexOf("\"cmd\":\"forward\"") >= 0) {
+    moveTimed(forward, ms, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+    return;
+  }
+  if (message.indexOf("\"cmd\":\"backward\"") >= 0) {
+    moveTimed(back, ms, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+    return;
+  }
+  if (message.indexOf("\"cmd\":\"left\"") >= 0) {
+    moveTimed(left, ms, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+    return;
+  }
+  if (message.indexOf("\"cmd\":\"right\"") >= 0) {
+    moveTimed(right, ms, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW);
+    return;
+  }
 
   // ping/pong (if you use app-level ping)
   if (message.indexOf("\"type\":\"ping\"") >= 0) {
@@ -287,10 +311,8 @@ void handleTextMessage(const String& message) {
 
   // sample: sketch payload ack
   if (message.indexOf("\"type\":\"sketch\"") >= 0) {
-    // quick ack wiggle (non-blocking-ish via delayWithWS)
-    penServo.write(60);
-    delayWithWS(120);
-    penServo.write(90);
+    // Sketch submitted: draw a simple square with pen down.
+    drawSquareDemo();
     return;
   }
 }
@@ -360,7 +382,7 @@ void setup() {
   pwmInit();
 
   enableServo();
-  penUp();
+  penDown();
 
   stopMotors();
 
