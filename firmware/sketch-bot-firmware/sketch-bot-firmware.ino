@@ -1,3 +1,24 @@
+/*
+  ESP32 + L298N + Servo + WebSocket (ROBUST)
+
+  FIXES:
+  - No long blocking delays that starve WebSocket.
+  - All motion/pen timing uses delayWithWS() so webSocket.loop() runs continuously.
+  - Self-test runs ONCE (optional) instead of forever.
+  - Heartbeat enabled (ping/pong) to keep servers happy.
+  - Safe boot: motors stopped, pen up.
+
+  Motors (L298N):
+    IN1 17, IN2 16, ENA 25 (Left PWM)
+    IN3 27, IN4 26, ENB 33 (Right PWM)
+
+  Servo:
+    SERVO_PIN 14
+
+  WebSocket:
+    ws://172.24.21.89:3001/
+*/
+
 #include <Arduino.h>
 #include <ESP32Servo.h>
 #include <WiFi.h>
@@ -20,16 +41,18 @@ const int SERVO_MIN_US = 500;
 const int SERVO_MAX_US = 2400;
 const int PEN_UP_ANGLE = 120;
 const int PEN_DOWN_ANGLE = 60;
-const uint16_t PEN_MOVE_DELAY_MS = 120;
+const uint16_t PEN_MOVE_DELAY_MS = 140;
 
 // ---------------- Motion tuning -----------------------
 int SPEED_MOVE = 255;       // 0..255
 int SPEED_TURN = 255;       // 0..255
 int SPEED_MOVE_SLOW = 140;  // slower, more controllable
 int SPEED_TURN_SLOW = 140;  // slower, more controllable
+
 uint32_t MOVE_MS  = 800;
 uint32_t TURN_MS  = 350;
 uint32_t PAUSE_MS = 200;
+
 const uint32_t STEP_MS = 60;
 const uint32_t MICRO_STEP_MS = 25;
 const uint32_t TURN_STEP_MS = 40;
@@ -37,30 +60,40 @@ const uint32_t TURN_MICRO_STEP_MS = 20;
 const uint32_t CORNER_APPROACH_MS = 50;
 
 // ---------------- WiFi / WebSocket --------------------
-// NOTE: "localhost" will NOT work from the ESP32.
-// Use the LAN IP of the machine running server/ws-server.js.
-const char* WIFI_SSID = "AhmadSamsung";
+const char* WIFI_SSID     = "AhmadSamsung";
 const char* WIFI_PASSWORD = "applePie123";
+
 const char* WS_HOST = "172.24.21.89";
 const uint16_t WS_PORT = 3001;
 const char* WS_PATH = "/";
 
 const char* CAR_NAME = "ESP32";
-const bool RUN_SELF_TEST = true;
+
+// Set true if you want a one-time motion test after WS connects (or after boot)
+const bool RUN_SELF_TEST_ONCE = false;
 
 WebSocketsClient webSocket;
-uint32_t lastStatusLogMs = 0;
-uint32_t lastWsLogMs = 0;
-uint32_t lastWsReconnectMs = 0;
-uint8_t wsFailureStreak = 0;
 
-// ---------------- PWM settings (NEW API) --------------
+// ---------------- PWM settings ------------------------
+// NOTE: "ledcAttach/ledcWrite" exist only in newer ESP32 core.
+// If you get compile errors, you must switch to ledcSetup/ledcAttachPin API.
 const int PWM_FREQ = 200;     // 100–500Hz often gives better torque on L298N
 const int PWM_RES  = 8;       // 0..255
 
-// ================= SERVO ==============================
+// self test latch
+bool didSelfTest = false;
+
+// --------------- helpers: keep WS alive ---------------
+void delayWithWS(uint32_t ms) {
+  uint32_t start = millis();
+  while (millis() - start < ms) {
+    webSocket.loop();
+    delay(1); // yield to WiFi stack
+  }
+}
+
+// --------------- SERVO -------------------------------
 void enableServo() {
-  // Required in your environment for ESP32Servo
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
   ESP32PWM::allocateTimer(2);
@@ -72,23 +105,19 @@ void enableServo() {
 
 void penUp() {
   penServo.write(PEN_UP_ANGLE);
-  delay(PEN_MOVE_DELAY_MS);
+  delayWithWS(PEN_MOVE_DELAY_MS);
 }
 
 void penDown() {
   penServo.write(PEN_DOWN_ANGLE);
-  delay(PEN_MOVE_DELAY_MS);
+  delayWithWS(PEN_MOVE_DELAY_MS);
 }
 
-// ================= PWM (Motors) =======================
+// --------------- PWM (Motors) ------------------------
 // NEW API: attach PWM directly to a pin
 void pwmInit() {
-  // Attach PWM generators to ENA/ENB pins
-  // (No channels needed in this API style)
   ledcAttach(ENA, PWM_FREQ, PWM_RES);
   ledcAttach(ENB, PWM_FREQ, PWM_RES);
-
-  // Start stopped
   ledcWrite(ENA, 0);
   ledcWrite(ENB, 0);
 }
@@ -100,7 +129,7 @@ void setPWM(int l, int r) {
   ledcWrite(ENB, r);
 }
 
-// ================= MOTORS =============================
+// --------------- MOTORS ------------------------------
 void stopMotors() {
   // Brake (both inputs HIGH)
   digitalWrite(IN1, HIGH); digitalWrite(IN2, HIGH);
@@ -133,9 +162,9 @@ void left() {
 void moveTimed(void (*dirFn)(), uint32_t ms, int spL, int spR) {
   dirFn();
   setPWM(spL, spR);
-  delay(ms);
+  delayWithWS(ms);
   stopMotors();
-  delay(PAUSE_MS);
+  delayWithWS(PAUSE_MS);
 }
 
 void moveTimedWithPen(void (*dirFn)(), uint32_t ms, int spL, int spR) {
@@ -144,7 +173,7 @@ void moveTimedWithPen(void (*dirFn)(), uint32_t ms, int spL, int spR) {
   penUp();
 }
 
-// ================= SHORT MOVES ========================
+// --------------- SHORT MOVES -------------------------
 void forwardStep() { moveTimed(forward, STEP_MS, SPEED_MOVE, SPEED_MOVE); }
 void backStep()    { moveTimed(back,    STEP_MS, SPEED_MOVE, SPEED_MOVE); }
 void leftStep()    { moveTimed(left,    TURN_STEP_MS, SPEED_TURN, SPEED_TURN); }
@@ -155,7 +184,6 @@ void backMicro()    { moveTimed(back,    MICRO_STEP_MS, SPEED_MOVE, SPEED_MOVE);
 void leftMicro()    { moveTimed(left,    TURN_MICRO_STEP_MS, SPEED_TURN, SPEED_TURN); }
 void rightMicro()   { moveTimed(right,   TURN_MICRO_STEP_MS, SPEED_TURN, SPEED_TURN); }
 
-// Precision (slower) moves for better cornering control
 void forwardStepSlow() { moveTimed(forward, STEP_MS, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW); }
 void backStepSlow()    { moveTimed(back,    STEP_MS, SPEED_MOVE_SLOW, SPEED_MOVE_SLOW); }
 void leftStepSlow()    { moveTimed(left,    TURN_STEP_MS, SPEED_TURN_SLOW, SPEED_TURN_SLOW); }
@@ -183,7 +211,7 @@ void cornerRight() {
   penDown();
 }
 
-// ================= NETWORK ============================
+// --------------- NETWORK -----------------------------
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -191,6 +219,7 @@ void connectWiFi() {
   uint32_t start = millis();
   Serial.print("WiFi connecting to ");
   Serial.println(WIFI_SSID);
+
   while (WiFi.status() != WL_CONNECTED) {
     delay(250);
     Serial.print(".");
@@ -200,10 +229,13 @@ void connectWiFi() {
       break;
     }
   }
+
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println();
     Serial.print("WiFi connected, IP: ");
     Serial.println(WiFi.localIP());
+    Serial.print("Gateway: ");
+    Serial.println(WiFi.gatewayIP());
   }
 }
 
@@ -219,15 +251,8 @@ void sendRegister() {
 void handleTextMessage(const String& message) {
   Serial.print("WS text: ");
   Serial.println(message);
-  if (message.indexOf("\"type\":\"sketch\"") >= 0) {
-    // TODO: parse sketch payload and convert to motor commands.
-    // For now just acknowledge receipt by briefly pulsing the servo.
-    penServo.write(60);
-    delay(120);
-    penServo.write(90);
-    return;
-  }
 
+  // very basic string matching commands
   if (message.indexOf("\"cmd\":\"forward_step\"") >= 0) { forwardStep(); return; }
   if (message.indexOf("\"cmd\":\"back_step\"") >= 0) { backStep(); return; }
   if (message.indexOf("\"cmd\":\"left_step\"") >= 0) { leftStep(); return; }
@@ -254,8 +279,19 @@ void handleTextMessage(const String& message) {
   if (message.indexOf("\"cmd\":\"pen_up\"") >= 0) { penUp(); return; }
   if (message.indexOf("\"cmd\":\"pen_down\"") >= 0) { penDown(); return; }
 
+  // ping/pong (if you use app-level ping)
   if (message.indexOf("\"type\":\"ping\"") >= 0) {
     webSocket.sendTXT("{\"type\":\"pong\"}");
+    return;
+  }
+
+  // sample: sketch payload ack
+  if (message.indexOf("\"type\":\"sketch\"") >= 0) {
+    // quick ack wiggle (non-blocking-ish via delayWithWS)
+    penServo.write(60);
+    delayWithWS(120);
+    penServo.write(90);
+    return;
   }
 }
 
@@ -263,29 +299,53 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
       Serial.println("WS connected");
-      Serial.print("WS URL: ws://");
-      Serial.print(WS_HOST);
-      Serial.print(":");
-      Serial.print(WS_PORT);
-      Serial.println(WS_PATH);
-      wsFailureStreak = 0;
       sendRegister();
       break;
+
     case WStype_TEXT: {
       String message = String(reinterpret_cast<char*>(payload), length);
       handleTextMessage(message);
       break;
     }
+
     case WStype_DISCONNECTED:
       Serial.println("WS disconnected");
-      if (wsFailureStreak < 255) wsFailureStreak++;
       break;
+
     case WStype_ERROR:
       Serial.println("WS error");
       break;
+
     default:
       break;
   }
+}
+
+void connectWebSocket() {
+  Serial.print("WS connecting to ws://");
+  Serial.print(WS_HOST);
+  Serial.print(":");
+  Serial.print(WS_PORT);
+  Serial.println(WS_PATH);
+
+  webSocket.begin(WS_HOST, WS_PORT, WS_PATH);
+  webSocket.onEvent(webSocketEvent);
+
+  // Keep trying if it drops
+  webSocket.setReconnectInterval(5000);
+
+  // Heartbeat: ping every 15s, wait 3s for pong, fail after 2 misses
+  webSocket.enableHeartbeat(15000, 3000, 2);
+}
+
+// --------------- optional self test -------------------
+void runSelfTestOnce() {
+  Serial.println("Running self-test once...");
+  moveTimedWithPen(forward, MOVE_MS, SPEED_MOVE, SPEED_MOVE);
+  moveTimedWithPen(right,   TURN_MS, SPEED_TURN, SPEED_TURN);
+  moveTimedWithPen(back,    MOVE_MS, SPEED_MOVE, SPEED_MOVE);
+  moveTimedWithPen(left,    TURN_MS, SPEED_TURN, SPEED_TURN);
+  Serial.println("Self-test complete.");
 }
 
 // ================= SETUP / LOOP =======================
@@ -302,60 +362,34 @@ void setup() {
   enableServo();
   penUp();
 
-  // optional: ensure motors are stopped at boot
   stopMotors();
 
   connectWiFi();
+  connectWebSocket();
 
-  Serial.print("WS connecting to ws://");
-  Serial.print(WS_HOST);
-  Serial.print(":");
-  Serial.print(WS_PORT);
-  Serial.println(WS_PATH);
-  webSocket.begin(WS_HOST, WS_PORT, WS_PATH);
-  webSocket.onEvent(webSocketEvent);
-  webSocket.setReconnectInterval(5000);
-  webSocket.enableHeartbeat(15000, 3000, 2);
+  Serial.println("Setup complete.");
 }
 
 void loop() {
+  // Always service WS frequently
   webSocket.loop();
 
-  if (millis() - lastWsLogMs > 10000) {
-    lastWsLogMs = millis();
-    Serial.print("WS state: ");
-    Serial.println(webSocket.isConnected() ? "connected" : "disconnected");
-  }
-
-  // If hotspot keeps stale connections, force a full Wi-Fi reconnect
-  if (!webSocket.isConnected() && WiFi.status() == WL_CONNECTED) {
-    if (millis() - lastWsReconnectMs > 20000 || wsFailureStreak >= 3) {
-      Serial.println("WS stuck, forcing Wi-Fi reconnect...");
-      lastWsReconnectMs = millis();
-      wsFailureStreak = 0;
-      webSocket.disconnect();
-      WiFi.disconnect(true);
-      delay(200);
-      connectWiFi();
-      webSocket.begin(WS_HOST, WS_PORT, WS_PATH);
-      webSocket.onEvent(webSocketEvent);
-      webSocket.setReconnectInterval(5000);
-      webSocket.enableHeartbeat(15000, 3000, 2);
-    }
-  }
-
-  if (RUN_SELF_TEST) {
-    moveTimedWithPen(forward, MOVE_MS, SPEED_MOVE, SPEED_MOVE);
-    moveTimedWithPen(right,   TURN_MS, SPEED_TURN, SPEED_TURN);
-    moveTimedWithPen(back,    MOVE_MS, SPEED_MOVE, SPEED_MOVE);
-    moveTimedWithPen(left,    TURN_MS, SPEED_TURN, SPEED_TURN);
-  }
-
-  if (millis() - lastStatusLogMs > 10000) {
-    lastStatusLogMs = millis();
+  // If WiFi drops, reconnect (and WS will auto-reconnect)
+  static uint32_t lastWifiCheck = 0;
+  if (millis() - lastWifiCheck > 2000) {
+    lastWifiCheck = millis();
     if (WiFi.status() != WL_CONNECTED) {
       Serial.println("WiFi dropped, reconnecting...");
       connectWiFi();
     }
   }
+
+  // Optional one-time self-test (won't starve WS because we use delayWithWS)
+  if (RUN_SELF_TEST_ONCE && !didSelfTest) {
+    didSelfTest = true;
+    runSelfTestOnce();
+  }
+
+  // tiny idle yield (keeps loop smooth)
+  delay(1);
 }
