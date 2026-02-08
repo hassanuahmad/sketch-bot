@@ -25,7 +25,7 @@ const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
         <div
           className={`w-2.5 h-2.5 rounded-full ${
             isConnected
-              ? "bg-status-connected animate-pulse-slow glow-green"
+              ? "bg-green-500 animate-pulse-slow glow-green"
               : "bg-status-disconnected glow-red"
           }`}
         />

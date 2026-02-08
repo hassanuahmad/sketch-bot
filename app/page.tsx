@@ -114,7 +114,9 @@ const Index: React.FC = () => {
   } = usePixelCanvas();
 
   const [activeTab, setActiveTab] = useState<"canvas" | "pov">("canvas");
-  const [isConnected] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [carName, setCarName] = useState("Car 1");
+  const wsRef = React.useRef<WebSocket | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -146,6 +148,50 @@ const Index: React.FC = () => {
   useEffect(() => {
     void loadSketches();
   }, [loadSketches]);
+
+  useEffect(() => {
+    const wsUrl =
+      process.env.NEXT_PUBLIC_WS_URL ||
+      `ws://${window.location.hostname}:3001`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.addEventListener("open", () => {
+      ws.send(
+        JSON.stringify({ type: "register", role: "ui", client: "web" }),
+      );
+    });
+
+    ws.addEventListener("message", (event) => {
+      let data: any;
+      try {
+        data = JSON.parse(String(event.data));
+      } catch {
+        return;
+      }
+
+      if (data.type === "status") {
+        setIsConnected(Boolean(data.carOnline));
+        if (data.carName) {
+          const name = String(data.carName);
+          setCarName(name === "ESP32" ? "Car 1" : name);
+        }
+      }
+    });
+
+    ws.addEventListener("close", () => {
+      setIsConnected(false);
+    });
+
+    ws.addEventListener("error", () => {
+      setIsConnected(false);
+    });
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, []);
 
   const isDrawingMode = activeTab === "canvas" && !isSubmitting;
 
@@ -189,6 +235,13 @@ const Index: React.FC = () => {
     if (ok) setIsSaveDialogOpen(false);
   }, [isSaving, isSubmitting, saveSketch, sketchName]);
 
+  const sendSketchToRobot = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ type: "sketch", sketch: grid }));
+    return true;
+  }, [grid]);
+
   const handleSaveAndSubmit = useCallback(async () => {
     if (isSaving || isSubmitting) return;
     setIsSubmitting(true);
@@ -199,23 +252,24 @@ const Index: React.FC = () => {
       setIsSubmitting(false);
       return;
     }
+    sendSketchToRobot();
     setIsSaveDialogOpen(false);
     // Switch to POV tab
     setTimeout(() => {
       setActiveTab("pov");
       setIsSubmitting(false);
     }, 500);
-  }, [isSaving, isSubmitting, saveSketch, sketchName]);
+  }, [isSaving, isSubmitting, saveSketch, sketchName, sendSketchToRobot]);
 
-  const handleSubmitWithoutSave = useCallback(() => {
-    if (isSaving || isSubmitting) return;
+  const handleSendToRobot = useCallback(() => {
+    if (isSubmitting || isSaving) return;
     setIsSubmitting(true);
-    setIsSaveDialogOpen(false);
+    const ok = sendSketchToRobot();
     setTimeout(() => {
       setActiveTab("pov");
       setIsSubmitting(false);
-    }, 500);
-  }, [isSaving, isSubmitting]);
+    }, ok ? 300 : 500);
+  }, [isSubmitting, isSaving, sendSketchToRobot]);
 
   const handleNewSketch = useCallback(() => {
     clearCanvas();
@@ -339,7 +393,7 @@ const Index: React.FC = () => {
       <main className="flex-1 flex flex-col min-w-0 p-4 gap-3">
         {/* Top Bar: Connection Status */}
         <div className="flex items-center gap-4 flex-wrap">
-          <ConnectionStatus isConnected={isConnected} />
+          <ConnectionStatus isConnected={isConnected} carName={carName} />
 
           {/* Tabs */}
           <div className="flex items-center bg-card border border-border rounded-lg overflow-hidden mx-auto">
@@ -482,7 +536,7 @@ const Index: React.FC = () => {
                   {isSaving ? "Saving..." : "Save as New"}
                 </Button>
                 <Button
-                  onClick={handleSubmitWithoutSave}
+                  onClick={handleSendToRobot}
                   disabled={isSaving || isSubmitting}
                 >
                   {isSubmitting ? "Sending..." : "Submit to Robot"}
