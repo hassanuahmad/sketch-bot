@@ -108,6 +108,7 @@ const Index: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"canvas" | "pov">("canvas");
   const [isConnected] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [sketches, setSketches] = useState<Sketch[]>([]);
 
   const loadSketches = useCallback(async () => {
@@ -234,6 +235,33 @@ const Index: React.FC = () => {
     [activeTab, setGrid],
   );
 
+  const handleGenerateDesign = useCallback(
+    async (prompt: string) => {
+      setIsGenerating(true);
+      try {
+        const response = await fetch("/api/design", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt }),
+        });
+        if (!response.ok) {
+          const detail = await response.text();
+          throw new Error(detail || "Design request failed");
+        }
+        const data = (await response.json()) as {
+          grid?: boolean[][];
+          caption?: string;
+        };
+        if (!data.grid) throw new Error("Missing grid in response");
+        setGrid(data.grid);
+        return data.caption || "Done. The design is on the canvas.";
+      } finally {
+        setIsGenerating(false);
+      }
+    },
+    [setGrid],
+  );
+
   return (
     <div className="flex h-screen bg-background overflow-hidden">
       {/* Left Sidebar - Recent Sketches */}
@@ -321,7 +349,10 @@ const Index: React.FC = () => {
         </div>
 
         {/* Chat Panel */}
-        <ChatPanel disabled={activeTab === "pov"} />
+        <ChatPanel
+          disabled={activeTab === "pov" || isGenerating}
+          onGenerateDesign={handleGenerateDesign}
+        />
 
         {/* Mobile Submit Button */}
         <button

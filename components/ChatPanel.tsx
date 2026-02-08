@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Send, Sparkles } from "lucide-react";
 
 interface ChatPanelProps {
-  onGenerateDesign?: (prompt: string) => void;
+  onGenerateDesign?: (prompt: string) => Promise<string | void> | string | void;
   disabled?: boolean;
 }
 
@@ -17,23 +17,32 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ onGenerateDesign, disabled = fals
     },
   ]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!message.trim()) return;
     const userMsg = message.trim();
     setMessages((prev) => [...prev, { role: "user", content: userMsg }]);
     setMessage("");
+    setMessages((prev) => [
+      ...prev,
+      { role: "ai", content: "Generating..." },
+    ]);
 
-    // Simulate AI response
-    setTimeout(() => {
+    try {
+      const reply = await onGenerateDesign?.(userMsg);
       setMessages((prev) => [
-        ...prev,
+        ...prev.slice(0, -1),
+        { role: "ai", content: reply || "Done. The design is on the canvas." },
+      ]);
+    } catch (error) {
+      console.error("Design generation failed", error);
+      setMessages((prev) => [
+        ...prev.slice(0, -1),
         {
           role: "ai",
-          content: `I'll generate "${userMsg}" for you. This feature will be connected to an AI backend soon!`,
+          content: "Sorry, I couldn't generate that. Try another prompt.",
         },
       ]);
-      onGenerateDesign?.(userMsg);
-    }, 800);
+    }
   };
 
   return (
